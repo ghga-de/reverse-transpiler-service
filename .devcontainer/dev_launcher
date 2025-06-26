@@ -1,0 +1,3 @@
+#!/bin/bash
+
+rts run-rest

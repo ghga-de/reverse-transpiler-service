@@ -1,0 +1,16 @@
+[project]
+name = "rts"
+version = "1.0.0"
+description = "Reverse Transpiler Service - A service running a REST API that serves accessioned metadata files by study ID"
+dependencies = [
+    "typer >= 0.15",
+    "ghga-service-commons[api] >= 4.1.0",
+    "ghga-event-schemas ~= 9.2",
+    "hexkit[akafka,s3,mongodb] >= 5.3",
+]
+
+[project.urls]
+Repository = "https://github.com/ghga-de/reverse-transpiler-service"
+
+[project.scripts]
+rts = "rts.__main__:cli"
