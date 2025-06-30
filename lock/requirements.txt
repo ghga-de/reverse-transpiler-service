@@ -214,6 +214,12 @@ email-validator==2.2.0 \
     # via
     #   -c lock/requirements-dev.txt
     #   pydantic
+et-xmlfile==2.0.0 \
+    --hash=sha256:7a91720bc756843502c3b7504c77b8fe44217c85c537d85037f0f536151b2caa \
+    --hash=sha256:dab3f4764309081ce75662649be815c4c9081e88f0837825f90fd28317d4da54
+    # via
+    #   -c lock/requirements-dev.txt
+    #   openpyxl
 fastapi==0.115.12 \
     --hash=sha256:1e2c2a2646905f9e83d32f04a3f86aff4a286669c6c950ca95b5fd68c2602681 \
     --hash=sha256:e94613d6c05e27be7ffebdd6ea5f388112e5e430c8f7d6494a9d1d88d43e814d
@@ -358,6 +364,12 @@ motor==3.7.0 \
     # via
     #   -c lock/requirements-dev.txt
     #   hexkit
+openpyxl==3.1.5 \
+    --hash=sha256:5282c12b107bffeef825f4617dc029afaf41d0ea60823bbb665ef3079dc79de2 \
+    --hash=sha256:cf0e3cf56142039133628b5acffe8ef0c12bc902d2aadd3e0fe5878dc08d1050
+    # via
+    #   -c lock/requirements-dev.txt
+    #   rts (pyproject.toml)
 opentelemetry-api==1.32.1 \
     --hash=sha256:a5be71591694a4d9195caf6776b055aa702e964d961051a0715d05f8632c32fb \
     --hash=sha256:bbd19f14ab9f15f0e85e43e6a958aa4cb1f36870ee62b7fd205783a112012724
