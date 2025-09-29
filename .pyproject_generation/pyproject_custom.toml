@@ -1,13 +1,13 @@
 [project]
 name = "rts"
-version = "2.0.0"
+version = "2.0.1"
 description = "Reverse Transpiler Service - A service running a REST API that serves accessioned metadata files by study ID"
 dependencies = [
-    "typer >= 0.15",
-    "ghga-service-commons[api] >= 5.0",
-    "ghga-event-schemas ~= 10.0",
-    "hexkit[akafka,mongodb] >= 6.0",
-    "openpyxl >= 3.0.0",
+    "typer >= 0.19",
+    "ghga-service-commons[api] >= 5.1",
+    "ghga-event-schemas ~= 10.1",
+    "hexkit[akafka,mongodb] >= 7.1",
+    "openpyxl >= 3.1.5",
 ]
 
 [project.urls]
