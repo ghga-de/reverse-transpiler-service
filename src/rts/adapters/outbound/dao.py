@@ -15,102 +15,74 @@
 
 """DAO implementation"""
 
+import json
 import logging
-from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from io import BytesIO
 
 from gridfs.asynchronous import AsyncGridFS
-from hexkit.protocols.dao import DaoFactoryProtocol
 from hexkit.providers.mongodb.provider import ConfiguredMongoClient, MongoDbConfig
 from openpyxl import Workbook
 
 from rts.models import StudyMetadata
-from rts.ports.outbound.dao import MetadataDao, ResourceNotFoundError, WorkbookDaoPort
+from rts.ports.outbound.dao import (
+    GridFSDao,
+    GridFSDaoFactoryPort,
+    MetadataGridFSDaoPort,
+    WorkbookGridFSDaoPort,
+)
 
 log = logging.getLogger(__name__)
 
-__all__ = [
-    "FILE_EXTENSION",
-    "METADATA_COLLECTION",
-    "WorkbookDao",
-    "get_metadata_dao",
-    "get_workbook_dao",
-]
+__all__ = ["METADATA_COLLECTION"]
 
 METADATA_COLLECTION = "metadata"
-FILE_EXTENSION = ".xlsx"
 
 
-async def get_metadata_dao(*, dao_factory: DaoFactoryProtocol) -> MetadataDao:
-    """Construct a metadata DAO from the provided dao_factory"""
-    return await dao_factory.get_dao(
-        name=METADATA_COLLECTION,
-        dto_model=StudyMetadata,
-        id_field="study_accession",
-    )
+class GridFSDaoFactory(GridFSDaoFactoryPort):
+    @classmethod
+    @asynccontextmanager
+    async def construct(cls, *, config: MongoDbConfig):
+        async with ConfiguredMongoClient(config=config) as client:
+            db = client[config.db_name]
+            grid_fs = AsyncGridFS(db)
+            yield GridFSDaoFactory(grid_fs=grid_fs)
 
-
-class WorkbookDao(WorkbookDaoPort):
-    """Limited DAO for storing workbook data in the database."""
-
-    def __init__(self, grid_fs: AsyncGridFS):
-        """DO NOT CALL DIRECTLY! Use `get_workbook_dao` instead.
-
-        Initialize the WorkbookDao with the provided AsyncGridFS instance.
-        """
+    def __init__(self, *, grid_fs: AsyncGridFS):
         self._grid_fs = grid_fs
 
-    async def upsert(self, *, workbook: Workbook, study_accession: str) -> None:
-        """Upsert the workbook for a given study accession.
+    def get_metadata_dao(self) -> MetadataGridFSDaoPort:
+        """Return a MetadataDaoPort instance"""
 
-        If the workbook already exists, it will be replaced.
-        """
-        # Convert the workbook to a bytestream
-        workbook_bytestream = BytesIO()
-        workbook.save(workbook_bytestream)
-        workbook_bytestream.seek(0)
+        def serialize(metadata: StudyMetadata) -> bytes:
+            return bytes(metadata.model_dump_json(), encoding="utf-8")
 
-        # Delete the file if it already exists
-        await self._grid_fs.delete(study_accession)
+        def deserialize(serialized_data: bytes) -> StudyMetadata:
+            return StudyMetadata(**json.loads(serialized_data.decode()))
 
-        # Insert new file
-        await self._grid_fs.put(
-            data=workbook_bytestream,
-            _id=study_accession,
-            filename=f"{study_accession}{FILE_EXTENSION}",  # e.g. my_accession.xlsx
+        return GridFSDao(
+            grid_fs=self._grid_fs,
+            prefix="metadata__",
+            file_extension="",
+            serialize_fn=serialize,
+            deserialize_fn=deserialize,
         )
-        log.debug("Workbook upserted for study accession: %s", study_accession)
 
-    async def find(self, *, study_accession: str) -> bytes:
-        """Retrieve the workbook for a given study accession.
+    def get_workbook_dao(self) -> WorkbookGridFSDaoPort:
+        """Return a WorkbookDaoPort instance"""
 
-        Raises `ResourceNotFoundError` if the workbook does not exist for the
-        given study accession.
-        """
-        result = await self._grid_fs.find_one(study_accession)
+        def serialize(workbook: Workbook) -> bytes:
+            """Convert the workbook to bytes"""
+            workbook_bytestream = BytesIO()
+            workbook.save(workbook_bytestream)
+            workbook_bytestream.seek(0)
+            return workbook_bytestream.read()
 
-        if result is None:
-            raise ResourceNotFoundError(id_=study_accession)
-
-        log.debug("Workbook found for study accession: %s", study_accession)
-
-        return await result.read()
-
-    async def delete(self, *, study_accession: str) -> None:
-        """Delete the workbook for a given study accession.
-
-        Does not raise an error if the workbook does not exist, as GridFS doesn't raise
-        an error when trying to delete a non-existent file.
-        """
-        await self._grid_fs.delete(study_accession)
-        log.debug("Workbook deleted for study accession: %s", study_accession)
-
-
-@asynccontextmanager
-async def get_workbook_dao(*, config: MongoDbConfig) -> AsyncGenerator[WorkbookDaoPort]:
-    """Constructs the WorkbookDao with the provided MongoDB configuration."""
-    async with ConfiguredMongoClient(config=config) as client:
-        db = client[config.db_name]
-        grid_fs = AsyncGridFS(db)
-        yield WorkbookDao(grid_fs=grid_fs)
+        # Workbook data is returned as bytes - use default deserializer (return as-is)
+        return GridFSDao(
+            grid_fs=self._grid_fs,
+            prefix="workbook__",
+            file_extension=".xlsx",
+            serialize_fn=serialize,
+            deserialize_fn=lambda data: data,
+        )

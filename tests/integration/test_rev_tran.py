@@ -129,7 +129,7 @@ async def test_upsert(joint_fixture: JointFixture):
     accession = study_metadata.study_accession
 
     # Delete the workbook from storage, since that is only created when new data comes in
-    await reverse_transpiler._workbook_dao.delete(study_accession=accession)  # type: ignore
+    await reverse_transpiler._workbook_dao.delete(id_=accession)  # type: ignore
 
     # Load the data again, but this time it shouldn't recreate the workbook
     await reverse_transpiler.upsert_metadata(study_metadata=study_metadata)

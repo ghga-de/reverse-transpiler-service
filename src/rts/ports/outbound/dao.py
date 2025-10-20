@@ -16,42 +16,118 @@
 """DAO Port definition"""
 
 from abc import ABC, abstractmethod
+from collections.abc import Callable
+from typing import Any
 
-from hexkit.protocols.dao import Dao, ResourceNotFoundError
+from gridfs import AsyncGridFS
+from hexkit.protocols.dao import ResourceNotFoundError
 from openpyxl import Workbook
 
 from rts.models import StudyMetadata
 
-__all__ = ["MetadataDao", "ResourceNotFoundError", "WorkbookDaoPort"]
+__all__ = [
+    "GridFSDao",
+    "GridFSDaoFactoryPort",
+    "MetadataGridFSDaoPort",
+    "ResourceNotFoundError",
+    "WorkbookGridFSDaoPort",
+]
 
-MetadataDao = Dao[StudyMetadata]
 
+class GridFSDao[InputType: Any, OutputType: Any]:
+    """A class that enables basic utilization of GridFS.
 
-class WorkbookDaoPort(ABC):
-    """Limited DAO for storing workbook data in the database."""
+    This class could go into a library at some point.
+    """
 
-    @abstractmethod
-    async def upsert(self, *, workbook: Workbook, study_accession: str) -> None:
-        """Upsert the workbook for a given study accession.
+    def __init__(
+        self,
+        *,
+        grid_fs: AsyncGridFS,
+        prefix: str,
+        file_extension: str = "",
+        serialize_fn: Callable[[InputType], bytes],
+        deserialize_fn: Callable[[bytes], OutputType],
+    ):
+        """Initialize the WorkbookDao with the provided AsyncGridFS instance.
 
-        If the workbook already exists, it will be replaced.
+        Args:
+            grid_fs: Instantiated AsyncGridFS object
+            prefix: A prefix used to attach to all stored file names. This is used
+                in case objects of different kinds are stored with the same identifier.
+            file_extension: An optional file extension to use when storing the data.
+            serialize_fn: A function that serializes the input data to bytes before
+                storage in GridFS.
+            deserialize_fn: A function that deserializes the data from bytes to the
+                desired format.
         """
-        ...
+        self._grid_fs = grid_fs
+        self._prefix = prefix
+        self._file_extension = file_extension
+        self._serialize_fn = serialize_fn
+        self._deserialize_fn = deserialize_fn
 
-    @abstractmethod
-    async def find(self, *, study_accession: str) -> bytes:
-        """Retrieve the workbook for a given study accession.
+    def prefixed_id(self, id_: str) -> str:
+        """Prepend the instance prefix to the data identifier"""
+        return f"{self._prefix}{id_}"
 
-        Raises `ResourceNotFoundError` if the workbook does not exist for the
-        given study accession.
+    async def upsert(self, *, data: InputType, id_: str) -> None:
+        """Upsert the data for a given identifier.
+
+        If a file with the same identifier already exists, it will be replaced.
+
+        To avoid conflicts with identically named files of other kinds, the identifier
+        is automatically prefixed.
         """
-        ...
+        # Serialize the data:
+        serialized_data = self._serialize_fn(data)
 
-    @abstractmethod
-    async def delete(self, *, study_accession: str) -> None:
-        """Delete the workbook for a given study accession.
+        # Delete the file if it already exists
+        prefixed_id = self.prefixed_id(id_)
+        await self._grid_fs.delete(prefixed_id)
 
-        Does not raise an error if the workbook does not exist, as GridFS doesn't raise
+        # Insert new file
+        await self._grid_fs.put(
+            data=serialized_data,
+            _id=prefixed_id,
+            filename=f"{id_}{self._file_extension}",
+        )
+
+    async def find(self, *, id_: str) -> OutputType:
+        """Retrieve the file for a given identifier (do not include the prefix).
+
+        Raises `ResourceNotFoundError` if the file does not exist for the
+        given identifier.
+        """
+        gridfs_file_object = await self._grid_fs.find_one(self.prefixed_id(id_))
+
+        if gridfs_file_object is None:
+            raise ResourceNotFoundError(id_=id_)
+
+        serialized_data = await gridfs_file_object.read()
+        deserialized_data = self._deserialize_fn(serialized_data)
+        return deserialized_data
+
+    async def delete(self, *, id_: str) -> None:
+        """Delete the file for a given identifier (do not include the prefix).
+
+        Does not raise an error if the file does not exist, as GridFS doesn't raise
         an error when trying to delete a non-existent file.
         """
-        ...
+        await self._grid_fs.delete(self.prefixed_id(id_))
+
+
+WorkbookGridFSDaoPort = GridFSDao[Workbook, bytes]
+MetadataGridFSDaoPort = GridFSDao[StudyMetadata, StudyMetadata]
+
+
+class GridFSDaoFactoryPort(ABC):
+    """Port definition of a factory that produces objects able to interact with GridFS"""
+
+    @abstractmethod
+    def get_metadata_dao(self) -> MetadataGridFSDaoPort:
+        """Return a MetadataDaoPort instance"""
+
+    @abstractmethod
+    def get_workbook_dao(self) -> WorkbookGridFSDaoPort:
+        """Return a WorkbookDaoPort instance"""
