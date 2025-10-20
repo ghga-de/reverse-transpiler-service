@@ -16,7 +16,7 @@
 """DAO Port definition"""
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from gridfs import AsyncGridFS
@@ -107,6 +107,14 @@ class GridFSDao[InputType: Any, OutputType: Any]:
         serialized_data = await gridfs_file_object.read()
         deserialized_data = self._deserialize_fn(serialized_data)
         return deserialized_data
+
+    async def find_all(self) -> AsyncIterator[OutputType]:
+        """Returns an iterator of all files beginning with this DAO's assigned prefix"""
+        filenames = [
+            f for f in (await self._grid_fs.list()) if f.startswith(self._prefix)
+        ]
+        for filename in filenames:
+            yield await self._grid_fs.get(filename)
 
     async def delete(self, *, id_: str) -> None:
         """Delete the file for a given identifier (do not include the prefix).

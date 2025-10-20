@@ -17,6 +17,7 @@
 
 import json
 import logging
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from io import BytesIO
 
@@ -34,15 +35,18 @@ from rts.ports.outbound.dao import (
 
 log = logging.getLogger(__name__)
 
-__all__ = ["METADATA_COLLECTION"]
-
-METADATA_COLLECTION = "metadata"
+__all__ = ["GridFSDaoFactory"]
 
 
 class GridFSDaoFactory(GridFSDaoFactoryPort):
+    """A factory that produces objects able to interact with GridFS"""
+
     @classmethod
     @asynccontextmanager
-    async def construct(cls, *, config: MongoDbConfig):
+    async def construct(
+        cls, *, config: MongoDbConfig
+    ) -> AsyncGenerator["GridFSDaoFactory"]:
+        """Instantiate a GridFSDaoFactory with a configured MongoDB client"""
         async with ConfiguredMongoClient(config=config) as client:
             db = client[config.db_name]
             grid_fs = AsyncGridFS(db)
