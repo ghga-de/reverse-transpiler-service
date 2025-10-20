@@ -15,11 +15,13 @@
 
 """DAO Port definition"""
 
+import re
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from gridfs import AsyncGridFS
+from gridfs.errors import NoFile
 from hexkit.protocols.dao import ResourceNotFoundError
 from openpyxl import Workbook
 
@@ -90,7 +92,7 @@ class GridFSDao[InputType: Any, OutputType: Any]:
         await self._grid_fs.put(
             data=serialized_data,
             _id=prefixed_id,
-            filename=f"{id_}{self._file_extension}",
+            filename=f"{prefixed_id}{self._file_extension}",
         )
 
     async def find(self, *, id_: str) -> OutputType:
@@ -99,10 +101,11 @@ class GridFSDao[InputType: Any, OutputType: Any]:
         Raises `ResourceNotFoundError` if the file does not exist for the
         given identifier.
         """
-        gridfs_file_object = await self._grid_fs.find_one(self.prefixed_id(id_))
-
-        if gridfs_file_object is None:
-            raise ResourceNotFoundError(id_=id_)
+        prefixed_id = self.prefixed_id(id_)
+        try:
+            gridfs_file_object = await self._grid_fs.get(prefixed_id)
+        except NoFile as err:
+            raise ResourceNotFoundError(id_=id_) from err
 
         serialized_data = await gridfs_file_object.read()
         deserialized_data = self._deserialize_fn(serialized_data)
@@ -110,11 +113,10 @@ class GridFSDao[InputType: Any, OutputType: Any]:
 
     async def find_all(self) -> AsyncIterator[OutputType]:
         """Returns an iterator of all files beginning with this DAO's assigned prefix"""
-        filenames = [
-            f for f in (await self._grid_fs.list()) if f.startswith(self._prefix)
-        ]
-        for filename in filenames:
-            yield await self._grid_fs.get(filename)
+        regx = re.compile(f"^{self._prefix}.+", re.IGNORECASE)
+        async for file in self._grid_fs.find({"filename": {"$regex": regx}}):
+            file_bytes = await file.read()
+            yield self._deserialize_fn(file_bytes)
 
     async def delete(self, *, id_: str) -> None:
         """Delete the file for a given identifier (do not include the prefix).

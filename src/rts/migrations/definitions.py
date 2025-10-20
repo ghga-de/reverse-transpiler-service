@@ -17,14 +17,15 @@
 
 from contextlib import suppress
 
+from gridfs import AsyncGridFS, AsyncGridFSBucket
 from hexkit.providers.mongodb.migrations import MigrationDefinition, Reversible
 
 from rts.adapters.outbound.dao import GridFSDaoFactory
-from rts.config import Config
 from rts.models import StudyMetadata
 from rts.ports.outbound.dao import ResourceNotFoundError
 
 METADATA = "metadata"
+WORKBOOK_PREFIX = "workbook__"
 
 
 class V2Migration(MigrationDefinition, Reversible):
@@ -38,33 +39,49 @@ class V2Migration(MigrationDefinition, Reversible):
 
     async def apply(self):
         """Perform the migration."""
+        # Prefix all existing workbook files in grid fs with 'workbook__'
+        grid_fs = AsyncGridFS(self._db)
+        grid_fs_bucket = AsyncGridFSBucket(self._db)
+        for filename in await grid_fs.list():
+            if not filename.startswith(WORKBOOK_PREFIX):
+                await grid_fs_bucket.rename_by_name(
+                    filename, f"{WORKBOOK_PREFIX}{filename}"
+                )
+
         # Iterate over the collection and move each item into GridFS
         collection = self._db[METADATA]
-        config = Config()
-        async with GridFSDaoFactory.construct(config=config) as gridfs_dao_factory:
-            gridfs_dao = gridfs_dao_factory.get_metadata_dao()
-            async for doc in collection.find():
-                doc["study_accession"] = doc.pop("_id")
-                metadata = StudyMetadata(**doc)
-                accession = metadata.study_accession
-                # We don't want to accidentally overwrite something in this process,
-                #  so be careful and double check there's no name collision:
-                with suppress(ResourceNotFoundError):
-                    existing = await gridfs_dao.find(id_=accession)
-                    if existing:
-                        raise RuntimeError(f"Unexpected name collision for {accession}")
-                await gridfs_dao.upsert(data=metadata, id_=accession)
+        gridfs_dao_factory = GridFSDaoFactory(grid_fs=grid_fs)
+        gridfs_dao = gridfs_dao_factory.get_metadata_dao()
+        async for doc in collection.find():
+            doc["study_accession"] = doc.pop("_id")
+            metadata = StudyMetadata(**doc)
+            accession = metadata.study_accession
 
+            # We don't want to accidentally overwrite something in this process,
+            #  so be careful and double check there's no name collision:
+            prefixed_name = f"metadata__{accession}"
+            with suppress(ResourceNotFoundError):
+                existing = await gridfs_dao.find(id_=accession)
+                if existing:
+                    raise RuntimeError(f"Unexpected name collision for {prefixed_name}")
+            await gridfs_dao.upsert(data=metadata, id_=accession)
         await collection.drop()
 
     async def unapply(self):
         """Reverse the migration"""
+        grid_fs = AsyncGridFS(self._db)
         collection = self._db[METADATA]
-        config = Config()
-        async with GridFSDaoFactory.construct(config=config) as gridfs_dao_factory:
-            gridfs_dao = gridfs_dao_factory.get_metadata_dao()
-            async for metadata in gridfs_dao.find_all():
-                doc = metadata.model_dump()
-                doc["_id"] = doc.pop("study_accession")
-                await collection.insert_one(doc)
-                await gridfs_dao.delete(id_=doc["_id"])
+        gridfs_dao_factory = GridFSDaoFactory(grid_fs=grid_fs)
+        gridfs_dao = gridfs_dao_factory.get_metadata_dao()
+        async for metadata in gridfs_dao.find_all():
+            doc = metadata.model_dump()
+            doc["_id"] = doc.pop("study_accession")
+            await collection.insert_one(doc)
+            await gridfs_dao.delete(id_=doc["_id"])
+
+        # Remove 'workbook__' prefix from workbooks
+        grid_fs_bucket = AsyncGridFSBucket(self._db)
+        for filename in await grid_fs.list():
+            if filename.startswith(WORKBOOK_PREFIX):
+                modified_name = filename.removeprefix(WORKBOOK_PREFIX)
+                await grid_fs_bucket.rename_by_name(filename, modified_name)

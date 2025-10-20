@@ -29,11 +29,7 @@ from rts.config import Config
 from rts.core.rev_tran import ReverseTranspiler
 from rts.ports.inbound.rev_tran import ReverseTranspilerPort
 
-__all__ = [
-    "prepare_core",
-    "prepare_event_subscriber",
-    "prepare_rest_app",
-]
+__all__ = ["prepare_core", "prepare_event_subscriber", "prepare_rest_app"]
 
 
 @asynccontextmanager
