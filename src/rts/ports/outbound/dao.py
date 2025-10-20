@@ -21,7 +21,6 @@ from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from gridfs import AsyncGridFS
-from gridfs.errors import NoFile
 from hexkit.protocols.dao import ResourceNotFoundError
 from openpyxl import Workbook
 
@@ -102,19 +101,20 @@ class GridFSDao[InputType: Any, OutputType: Any]:
         given identifier.
         """
         prefixed_id = self.prefixed_id(id_)
-        try:
-            gridfs_file_object = await self._grid_fs.get(prefixed_id)
-        except NoFile as err:
-            raise ResourceNotFoundError(id_=id_) from err
+        result = await self._grid_fs.find_one(prefixed_id)
 
-        serialized_data = await gridfs_file_object.read()
+        if result is None:
+            raise ResourceNotFoundError(id_=id_)
+
+        serialized_data = await result.read()
         deserialized_data = self._deserialize_fn(serialized_data)
         return deserialized_data
 
     async def find_all(self) -> AsyncIterator[OutputType]:
         """Returns an iterator of all files beginning with this DAO's assigned prefix"""
-        regx = re.compile(f"^{self._prefix}.+", re.IGNORECASE)
-        async for file in self._grid_fs.find({"filename": {"$regex": regx}}):
+        # Use a regex to match anything beginning with the assigned prefix
+        regex = re.compile(f"^{self._prefix}.+", re.IGNORECASE)
+        async for file in self._grid_fs.find({"filename": {"$regex": regex}}):
             file_bytes = await file.read()
             yield self._deserialize_fn(file_bytes)
 
