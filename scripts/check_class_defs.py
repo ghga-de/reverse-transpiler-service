@@ -19,10 +19,8 @@
 import inspect
 
 # Import the abstract base classes and their implementations
-from rts.adapters.outbound.dao import WorkbookDao  # noqa: F401
 from rts.core.rev_tran import ReverseTranspiler  # noqa: F401
 from rts.ports.inbound.rev_tran import ReverseTranspilerPort
-from rts.ports.outbound.dao import WorkbookDaoPort
 
 
 def print_links(abc_method: type, imp_method: type):
@@ -68,7 +66,7 @@ def check_implementation(abc_class: type):
 
 def main():
     """Test me"""
-    ports = [ReverseTranspilerPort, WorkbookDaoPort]
+    ports = [ReverseTranspilerPort]
     for port in ports:
         check_implementation(port)
 
