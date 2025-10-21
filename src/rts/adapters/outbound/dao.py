@@ -59,7 +59,7 @@ class GridFSDaoFactory(GridFSDaoFactoryPort):
         """Return a MetadataDaoPort instance"""
 
         def serialize(metadata: StudyMetadata) -> bytes:
-            return bytes(metadata.model_dump_json(), encoding="utf-8")
+            return metadata.model_dump_json().encode()
 
         def deserialize(serialized_data: bytes) -> StudyMetadata:
             return StudyMetadata(**json.loads(serialized_data.decode()))
