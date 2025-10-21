@@ -19,7 +19,7 @@ from io import BytesIO
 from unittest.mock import AsyncMock
 
 import pytest
-from gridfs import GridFS
+from gridfs import GridFS, GridFSBucket
 from hexkit.providers.mongodb.testutils import MongoDbFixture
 from openpyxl import Workbook
 
@@ -32,6 +32,7 @@ from tests.fixtures.config import get_config
 pytestmark = pytest.mark.asyncio()
 
 METADATA = "metadata"
+WORKBOOKS = "workbooks"
 
 
 async def store_workbook_old_code(grid_fs: GridFS, workbook: Workbook, accession: str):
@@ -48,13 +49,20 @@ async def store_workbook_old_code(grid_fs: GridFS, workbook: Workbook, accession
 async def test_v2_migration(mongodb: MongoDbFixture):
     """Test the v2 migration.
 
-    Insert some StudyMetadata documents into the metadata collection, run the migration,
-    verify the data is in GridFS and the collection is dropped. Then reverse the
-    migration and verify things are back where they started.
+    Insert some StudyMetadata documents into the metadata collection, run the migration.
+    Expected results:
+    - Workbook data has been moved to 'workbooks' GridFS bucket, deleted from default bucket
+    - Metadata is stored in 'metadata' GridFS bucket
+    - MongoDB collection 'metadata' has been dropped
+
+    Then reverse the migration and verify changes have been reversed.
     """
     config = get_config(sources=[mongodb.config])
     db = mongodb.client.get_database(config.db_name)
     sync_grid_fs = GridFS(db)
+    default_bucket = GridFSBucket(db)
+    workbooks_bucket = GridFSBucket(db, WORKBOOKS)
+    metadata_bucket = GridFSBucket(db, METADATA)
     collection = db[METADATA]
 
     reverse_transpiler = ReverseTranspiler(
@@ -82,20 +90,30 @@ async def test_v2_migration(mongodb: MongoDbFixture):
             grid_fs=sync_grid_fs, workbook=workbook, accession=accession
         )
 
+    # Verify that the workbook data is now in the default bucket:
+    populated_workbooks = default_bucket.find().to_list()
+    assert len(populated_workbooks) == 5
+    assert all(file.filename.endswith(".xlsx") for file in populated_workbooks)
+
     # Insert the documents for the study metadata accompanying the workbook files
     collection.insert_many(metadata_docs)
 
     # Run the migration
     await run_db_migrations(config=config, target_version=2)
 
-    # Check that the metadata collection got dropped
+    # Check that the metadata collection got dropped:
     assert METADATA not in db.list_collection_names()
 
-    # Check that the existing workbook files got prefixed with 'workbook__'
-    filenames = [x for x in sync_grid_fs.list() if not x.startswith("metadata__")]
-    assert all(x.startswith("workbook__") for x in filenames)
+    # Verify that the workbooks were moved from the default bucket to 'workbooks' bucket
+    assert not default_bucket.find().to_list()
+    assert len(workbooks_bucket.find().to_list()) == 5
 
-    # Make sure the DAOs pull back the expected data
+    # Check that the 'metadata' bucket now has items:
+    metadata_grid_files = metadata_bucket.find().to_list()
+    assert len(metadata_grid_files) == 5
+    assert all(not file.filename.endswith(".xlsx") for file in metadata_grid_files)
+
+    # Now check that the new code retrieves results properly (DAOs get correct data)
     async with GridFSDaoFactory.construct(config=config) as grid_fs_factory:
         metadata_dao = grid_fs_factory.get_metadata_dao()
         metadata_files = [x async for x in metadata_dao.find_all()]
@@ -108,6 +126,13 @@ async def test_v2_migration(mongodb: MongoDbFixture):
     # Reverse the migration
     await run_db_migrations(config=config, target_version=1)
 
+    # Check that the workbooks data is gone from 'workbooks' bucket and back in default
+    assert not workbooks_bucket.find().to_list()
+    assert len(default_bucket.find().to_list()) == 5
+
+    # Check that the metadata files are removed from the 'metadata' bucket:
+    assert not metadata_bucket.find().to_list()
+
     async with GridFSDaoFactory.construct(config=config) as grid_fs_factory:
         metadata_dao = grid_fs_factory.get_metadata_dao()
         metadata_files = [x async for x in metadata_dao.find_all()]
@@ -117,11 +142,6 @@ async def test_v2_migration(mongodb: MongoDbFixture):
         workbook_dao = grid_fs_factory.get_workbook_dao()
         workbook_files = [x async for x in workbook_dao.find_all()]
         assert len(workbook_files) == 0  # DAO sees nothing with the expected prefix
-
-        # List the remaining files in grid fs and make sure none have the prefix
-        assert all(
-            not filename.startswith("workbook__") for filename in sync_grid_fs.list()
-        )
 
     # Refresh the metadata collection and verify the docs exist there again
     collection = db[METADATA]

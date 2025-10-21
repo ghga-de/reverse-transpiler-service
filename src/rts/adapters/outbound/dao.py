@@ -21,9 +21,9 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from io import BytesIO
 
-from gridfs.asynchronous import AsyncGridFS
 from hexkit.providers.mongodb.provider import ConfiguredMongoClient, MongoDbConfig
 from openpyxl import Workbook
+from pymongo.asynchronous.database import AsyncDatabase
 
 from rts.models import StudyMetadata
 from rts.ports.outbound.dao import (
@@ -49,11 +49,11 @@ class GridFSDaoFactory(GridFSDaoFactoryPort):
         """Instantiate a GridFSDaoFactory with a configured MongoDB client"""
         async with ConfiguredMongoClient(config=config) as client:
             db = client[config.db_name]
-            grid_fs = AsyncGridFS(db)
-            yield GridFSDaoFactory(grid_fs=grid_fs)
 
-    def __init__(self, *, grid_fs: AsyncGridFS):
-        self._grid_fs = grid_fs
+            yield GridFSDaoFactory(db=db)
+
+    def __init__(self, *, db: AsyncDatabase):
+        self._db = db
 
     def get_metadata_dao(self) -> MetadataGridFSDaoPort:
         """Return a MetadataDaoPort instance"""
@@ -65,8 +65,8 @@ class GridFSDaoFactory(GridFSDaoFactoryPort):
             return StudyMetadata(**json.loads(serialized_data.decode()))
 
         return GridFSDao(
-            grid_fs=self._grid_fs,
-            prefix="metadata__",
+            db=self._db,
+            name="metadata",
             file_extension="",
             serialize_fn=serialize,
             deserialize_fn=deserialize,
@@ -84,8 +84,8 @@ class GridFSDaoFactory(GridFSDaoFactoryPort):
 
         # Workbook data is returned as bytes - use default deserializer (return as-is)
         return GridFSDao(
-            grid_fs=self._grid_fs,
-            prefix="workbook__",
+            db=self._db,
+            name="workbooks",
             file_extension=".xlsx",
             serialize_fn=serialize,
             deserialize_fn=lambda data: data,

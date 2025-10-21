@@ -15,14 +15,16 @@
 
 """DAO Port definition"""
 
-import re
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable
+from contextlib import suppress
 from typing import Any
 
-from gridfs import AsyncGridFS
+from gridfs import AsyncGridFSBucket, NoFile
 from hexkit.protocols.dao import ResourceNotFoundError
 from openpyxl import Workbook
+from pymongo.asynchronous.database import AsyncDatabase
 
 from rts.models import StudyMetadata
 
@@ -34,6 +36,8 @@ __all__ = [
     "WorkbookGridFSDaoPort",
 ]
 
+log = logging.getLogger(__name__)
+
 
 class GridFSDao[InputType: Any, OutputType: Any]:
     """A class that enables basic utilization of GridFS.
@@ -41,11 +45,25 @@ class GridFSDao[InputType: Any, OutputType: Any]:
     This class could go into a library at some point.
     """
 
+    class SerializationError(RuntimeError):
+        """Raised when there's an error during data serialization"""
+
+        def __init__(self, filename: str):
+            msg = f"Failed to serialize data for filename {filename}"
+            super().__init__(msg)
+
+    class DeserializationError(RuntimeError):
+        """Raised when there's an error during data deserialization"""
+
+        def __init__(self, filename: str):
+            msg = f"Failed to deserialize data for filename {filename}"
+            super().__init__(msg)
+
     def __init__(
         self,
         *,
-        grid_fs: AsyncGridFS,
-        prefix: str,
+        db: AsyncDatabase,
+        name: str,
         file_extension: str = "",
         serialize_fn: Callable[[InputType], bytes],
         deserialize_fn: Callable[[bytes], OutputType],
@@ -54,77 +72,86 @@ class GridFSDao[InputType: Any, OutputType: Any]:
 
         Args:
             grid_fs: Instantiated AsyncGridFS object
-            prefix: A prefix used to attach to all stored file names. This is used
-                in case objects of different kinds are stored with the same identifier.
+            name: The name of the GridFSBucket to use -- analogous to collection name.
             file_extension: An optional file extension to use when storing the data.
             serialize_fn: A function that serializes the input data to bytes before
                 storage in GridFS.
             deserialize_fn: A function that deserializes the data from bytes to the
                 desired format.
         """
-        self._grid_fs = grid_fs
-        self._prefix = prefix
-        self._file_extension = file_extension
+        self._bucket = AsyncGridFSBucket(db=db, bucket_name=name)
         self._serialize_fn = serialize_fn
         self._deserialize_fn = deserialize_fn
+        if file_extension and not file_extension.startswith("."):
+            file_extension = "." + file_extension
+        self._file_extension = file_extension
 
-    def prefixed_id(self, id_: str) -> str:
-        """Prepend the instance prefix to the data identifier"""
-        return f"{self._prefix}{id_}"
+    async def upsert(self, *, data: InputType, filename: str) -> None:
+        """Upsert the data for a given filename (do not include extension).
 
-    async def upsert(self, *, data: InputType, id_: str) -> None:
-        """Upsert the data for a given identifier.
-
-        If a file with the same identifier already exists, it will be replaced.
-
-        To avoid conflicts with identically named files of other kinds, the identifier
-        is automatically prefixed.
+        If a file with the same name already exists, it will be replaced.
         """
         # Serialize the data:
-        serialized_data = self._serialize_fn(data)
+        try:
+            serialized_data = self._serialize_fn(data)
+        except Exception as err:
+            error = self.SerializationError(filename)
+            log.error(error, exc_info=True)
+            raise error from err
 
         # Delete the file if it already exists
-        prefixed_id = self.prefixed_id(id_)
-        await self._grid_fs.delete(prefixed_id)
+        with suppress(NoFile):
+            await self._bucket.delete(filename)
+            log.info("Found pre-existing file %s, overwriting.")
 
         # Insert new file
-        await self._grid_fs.put(
-            data=serialized_data,
-            _id=prefixed_id,
-            filename=f"{prefixed_id}{self._file_extension}",
+        await self._bucket.upload_from_stream_with_id(
+            source=serialized_data,
+            file_id=filename,
+            filename=f"{filename}{self._file_extension}",
         )
 
-    async def find(self, *, id_: str) -> OutputType:
-        """Retrieve the file for a given identifier (do not include the prefix).
+    async def find(self, *, filename: str) -> OutputType:
+        """Retrieve the file for a given filename (do not include file extension).
 
         Raises `ResourceNotFoundError` if the file does not exist for the
-        given identifier.
+        given filename.
         """
-        prefixed_id = self.prefixed_id(id_)
-        result = await self._grid_fs.find_one(prefixed_id)
-
-        if result is None:
-            raise ResourceNotFoundError(id_=id_)
+        try:
+            result = await self._bucket.open_download_stream(filename)
+        except NoFile as err:
+            raise ResourceNotFoundError(id_=filename) from err
 
         serialized_data = await result.read()
-        deserialized_data = self._deserialize_fn(serialized_data)
+        try:
+            deserialized_data = self._deserialize_fn(serialized_data)
+        except Exception as err:
+            error = self.DeserializationError(filename)
+            log.error(error, exc_info=True)
+            raise error from err
         return deserialized_data
 
     async def find_all(self) -> AsyncIterator[OutputType]:
-        """Returns an iterator of all files beginning with this DAO's assigned prefix"""
-        # Use a regex to match anything beginning with the assigned prefix
-        regex = re.compile(f"^{self._prefix}.+", re.IGNORECASE)
-        async for file in self._grid_fs.find({"filename": {"$regex": regex}}):
+        """Returns an iterator of all files in the bucket."""
+        async for file in self._bucket.find():
             file_bytes = await file.read()
-            yield self._deserialize_fn(file_bytes)
+            try:
+                deserialized_data = self._deserialize_fn(file_bytes)
+            except Exception as err:
+                error = self.DeserializationError(file.filename)
+                log.error(error, exc_info=True)
+                raise error from err
+            yield deserialized_data
 
-    async def delete(self, *, id_: str) -> None:
-        """Delete the file for a given identifier (do not include the prefix).
+    async def delete(self, *, filename: str) -> None:
+        """Delete the file for a given filename (do not include the extension).
 
-        Does not raise an error if the file does not exist, as GridFS doesn't raise
-        an error when trying to delete a non-existent file.
+        Raises a ResourceNotFoundError if the file doesn't exist.
         """
-        await self._grid_fs.delete(self.prefixed_id(id_))
+        try:
+            await self._bucket.delete(filename)
+        except NoFile as err:
+            raise ResourceNotFoundError(id_=filename) from err
 
 
 WorkbookGridFSDaoPort = GridFSDao[Workbook, bytes]

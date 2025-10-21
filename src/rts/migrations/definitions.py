@@ -13,19 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Database migration logic for the WPS."""
+"""Database migration logic for the RTS."""
 
 from contextlib import suppress
 
-from gridfs import AsyncGridFS, AsyncGridFSBucket
+from gridfs import AsyncGridFSBucket, NoFile
 from hexkit.providers.mongodb.migrations import MigrationDefinition, Reversible
 
 from rts.adapters.outbound.dao import GridFSDaoFactory
 from rts.models import StudyMetadata
-from rts.ports.outbound.dao import ResourceNotFoundError
 
 METADATA = "metadata"
-WORKBOOK_PREFIX = "workbook__"
+WORKBOOKS = "workbooks"
 
 
 class V2Migration(MigrationDefinition, Reversible):
@@ -39,19 +38,20 @@ class V2Migration(MigrationDefinition, Reversible):
 
     async def apply(self):
         """Perform the migration."""
-        # Prefix all existing workbook files in grid fs with 'workbook__'
-        grid_fs = AsyncGridFS(self._db)
-        grid_fs_bucket = AsyncGridFSBucket(self._db)
-        for filename in await grid_fs.list():
-            if not filename.startswith(WORKBOOK_PREFIX):
-                await grid_fs_bucket.rename_by_name(
-                    filename, f"{WORKBOOK_PREFIX}{filename}"
-                )
+        # Move all existing workbook files from default 'fs' bucket into 'workbooks' bucket
+        default_bucket = AsyncGridFSBucket(self._db)
+        workbooks_bucket = AsyncGridFSBucket(self._db, bucket_name=WORKBOOKS)
+        async for file in default_bucket.find():
+            await workbooks_bucket.upload_from_stream_with_id(
+                file_id=file._id,
+                filename=file.filename,
+                source=file,
+            )
+            await default_bucket.delete(file._id)
 
         # Iterate over the collection and move each item into GridFS
         collection = self._db[METADATA]
-        gridfs_dao_factory = GridFSDaoFactory(grid_fs=grid_fs)
-        gridfs_dao = gridfs_dao_factory.get_metadata_dao()
+        metadata_bucket = AsyncGridFSBucket(db=self._db, bucket_name=METADATA)
         async for doc in collection.find():
             doc["study_accession"] = doc.pop("_id")
             metadata = StudyMetadata(**doc)
@@ -59,29 +59,34 @@ class V2Migration(MigrationDefinition, Reversible):
 
             # We don't want to accidentally overwrite something in this process,
             #  so be careful and double check there's no name collision:
-            prefixed_name = f"metadata__{accession}"
-            with suppress(ResourceNotFoundError):
-                existing = await gridfs_dao.find(id_=accession)
-                if existing:
-                    raise RuntimeError(f"Unexpected name collision for {prefixed_name}")
-            await gridfs_dao.upsert(data=metadata, id_=accession)
+            with suppress(NoFile):
+                async for _ in metadata_bucket.find({"filename": accession}):
+                    raise RuntimeError(f"Unexpected name collision for {accession}")
+            await metadata_bucket.upload_from_stream_with_id(
+                file_id=accession,
+                filename=accession,
+                source=metadata.model_dump_json().encode("utf-8"),
+            )
         await collection.drop()
 
     async def unapply(self):
         """Reverse the migration"""
-        grid_fs = AsyncGridFS(self._db)
         collection = self._db[METADATA]
-        gridfs_dao_factory = GridFSDaoFactory(grid_fs=grid_fs)
+        gridfs_dao_factory = GridFSDaoFactory(db=self._db)
         gridfs_dao = gridfs_dao_factory.get_metadata_dao()
         async for metadata in gridfs_dao.find_all():
             doc = metadata.model_dump()
             doc["_id"] = doc.pop("study_accession")
             await collection.insert_one(doc)
-            await gridfs_dao.delete(id_=doc["_id"])
+            await gridfs_dao.delete(filename=doc["_id"])
 
-        # Remove 'workbook__' prefix from workbooks
-        grid_fs_bucket = AsyncGridFSBucket(self._db)
-        for filename in await grid_fs.list():
-            if filename.startswith(WORKBOOK_PREFIX):
-                modified_name = filename.removeprefix(WORKBOOK_PREFIX)
-                await grid_fs_bucket.rename_by_name(filename, modified_name)
+        # Move workbooks back into default 'fs' bucket
+        default_bucket = AsyncGridFSBucket(self._db)
+        workbooks_bucket = AsyncGridFSBucket(self._db, bucket_name=WORKBOOKS)
+        async for file in workbooks_bucket.find():
+            await default_bucket.upload_from_stream_with_id(
+                file_id=file._id,
+                filename=file.filename,
+                source=file,
+            )
+            await workbooks_bucket.delete(file._id)
