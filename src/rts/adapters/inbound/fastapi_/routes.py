@@ -66,7 +66,7 @@ async def get_transpiled_metadata(
     except ReverseTranspilerPort.MetadataNotFoundError as err:
         raise HttpMetadataNotFoundError(study_accession=accession) from err
 
-    response = Response(
+    return Response(
         status_code=200,
         content=data,
         headers={
@@ -74,4 +74,3 @@ async def get_transpiled_metadata(
             "Content-Type": XLSX_CONTENT_TYPE,
         },
     )
-    return response

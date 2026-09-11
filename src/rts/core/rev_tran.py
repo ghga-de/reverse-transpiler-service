@@ -93,11 +93,11 @@ class ReverseTranspiler(ReverseTranspilerPort):
                     accession,
                 )
                 return
-            else:
-                log.info(
-                    "Metadata for accession '%s' has changed, updating entry.",
-                    accession,
-                )
+
+            log.info(
+                "Metadata for accession '%s' has changed, updating entry.",
+                accession,
+            )
         except ResourceNotFoundError:
             log.debug(
                 "No existing metadata found for accession '%s', creating new entry.",
@@ -120,8 +120,7 @@ class ReverseTranspiler(ReverseTranspilerPort):
         given study accession.
         """
         try:
-            metadata = await self._metadata_dao.find(filename=study_accession)
-            return metadata
+            return await self._metadata_dao.find(filename=study_accession)
         except ResourceNotFoundError as err:
             raise self.MetadataNotFoundError(study_accession=study_accession) from err
 
@@ -162,8 +161,7 @@ class ReverseTranspiler(ReverseTranspilerPort):
         If no corresponding value is configured, the name will be returned unchanged
         but truncated to 31 characters if necessary.
         """
-        name = self._config.sheet_names.get(sheet_name, sheet_name[:31])
-        return name
+        return self._config.sheet_names.get(sheet_name, sheet_name[:31])
 
     def _format_value(self, value: Any) -> Any:
         """Format values for list and dict cells."""
@@ -210,7 +208,7 @@ class ReverseTranspiler(ReverseTranspilerPort):
 
             # Get the headers as union of all keys for all items
             # This makes it so we're not reliant on first item having all cols populated
-            column_names: set[str] = set(key for row in items for key in row)
+            column_names: set[str] = {key for row in items for key in row}
             column_headers = list(column_names)
 
             # Ensure 'alias' is the first column if present
