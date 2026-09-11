@@ -15,7 +15,9 @@
 
 """Integration tests for the reverse transpiler."""
 
+import asyncio
 from io import BytesIO
+from pathlib import Path
 
 import pytest
 from openpyxl import Workbook, load_workbook
@@ -26,6 +28,8 @@ from rts.ports.outbound.dao import ResourceNotFoundError
 from tests.fixtures.joint import JointFixture
 
 pytestmark = pytest.mark.asyncio()
+
+TEST_ARTIFACT_PATH = Path("tests/fixtures/test_artifact.json")
 
 
 def assert_workbooks_match(expected: Workbook, actual: Workbook) -> None:
@@ -41,8 +45,8 @@ def assert_workbooks_match(expected: Workbook, actual: Workbook) -> None:
         expected_sheet = expected[sheet_name]
         actual_sheet = actual[sheet_name]
 
-        expected_row_count = len([_ for _ in expected_sheet.rows])
-        actual_row_count = len([_ for _ in actual_sheet.rows])
+        expected_row_count = len(list(expected_sheet.rows))
+        actual_row_count = len(list(actual_sheet.rows))
         assert expected_row_count == actual_row_count, (
             f"Row counts do not match for sheet: {sheet_name} (expected:"
             + f" {expected_row_count}, got: {actual_row_count})"
@@ -63,8 +67,7 @@ async def load_test_data(reverse_transpiler: ReverseTranspilerPort) -> StudyMeta
 
     Returns the test data as a `StudyMetadata` object.
     """
-    with open("tests/fixtures/test_artifact.json") as file:
-        study_metadata_json = file.read()
+    study_metadata_json = await asyncio.to_thread(TEST_ARTIFACT_PATH.read_text)
     study_metadata = StudyMetadata.model_validate_json(study_metadata_json)
     await reverse_transpiler.upsert_metadata(study_metadata=study_metadata)
     return study_metadata

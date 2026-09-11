@@ -15,7 +15,9 @@
 
 """Tests for DB migrations"""
 
+import asyncio
 from io import BytesIO
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -28,6 +30,8 @@ from rts.core.rev_tran import ReverseTranspiler
 from rts.migrations.entry import run_db_migrations
 from rts.models import StudyMetadata
 from tests.fixtures.config import get_config
+
+TEST_ARTIFACT_PATH = Path("tests/fixtures/test_artifact.json")
 
 pytestmark = pytest.mark.asyncio()
 
@@ -70,8 +74,7 @@ async def test_v2_migration(mongodb: MongoDbFixture):
     )
 
     # Load workbook data
-    with open("tests/fixtures/test_artifact.json") as file:
-        study_metadata_json = file.read()
+    study_metadata_json = await asyncio.to_thread(TEST_ARTIFACT_PATH.read_text)
 
     study_metadata = StudyMetadata.model_validate_json(study_metadata_json)
     metadata_docs = []
