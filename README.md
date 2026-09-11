@@ -3,6 +3,13 @@
 
 # Reverse Transpiler Service
 
+> [!IMPORTANT]
+> **This repository is archived and no longer maintained.**
+>
+> The Reverse Transpiler Service is now maintained in the [GHGA monorepo](https://github.com/ghga-de/ghga) under [`services/reverse-transpiler-service`](https://github.com/ghga-de/ghga/tree/main/services/reverse-transpiler-service). Please open issues and pull requests there.
+>
+> This repository is kept read-only for its history. The documentation below describes the state of the code at the time of archival.
+
 Reverse Transpiler Service - A service running a REST API that serves accessioned metadata files by study ID
 
 ## Description
